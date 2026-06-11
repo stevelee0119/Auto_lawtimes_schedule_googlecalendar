@@ -51,6 +51,14 @@ class LegalEvent:
 
 
 def _parse_time(text: str) -> Optional[str]:
+    # "오전/오후 N시" or "오전/오후 N시 M분"
+    m = re.search(r"(오전|오후)\s*(\d{1,2})시(?:\s*(\d{1,2})분)?", text)
+    if m:
+        h = int(m.group(2))
+        minute = int(m.group(3)) if m.group(3) else 0
+        if m.group(1) == "오후" and h != 12:
+            h += 12
+        return f"{h:02d}:{minute:02d}"
     m = re.search(r"(\d{1,2})[:\.](\d{2})", text)
     if m:
         return f"{int(m.group(1)):02d}:{m.group(2)}"
@@ -254,15 +262,31 @@ def _parse_article(soup: BeautifulSoup, url: str) -> list[LegalEvent]:
     events: list[LegalEvent] = []
     year = datetime.now().year
 
-    body = (
-        soup.select_one(".article-body, .news-body, #article-body, .content-body")
-        or soup.find("div", {"class": re.compile(r"(article|content|body)", re.I)})
+    # Try progressively broader selectors
+    body = soup.select_one(
+        ".article-body, .news-body, #article-body, .content-body,"
+        " #news-view-text, .view-content, #viewContent, .article_body,"
+        " .article-view-content, #articleBodyContents, .news_view,"
+        " div[class*='article'], div[class*='content'], div[id*='article']"
     )
+    if not body:
+        body = soup.find("div", {"class": re.compile(r"(article|content|body|view)", re.I)})
     if not body:
         body = soup.body
 
+    # Debug: show which element was found
+    if body and body.name:
+        cls = body.get("class", [])
+        bid = body.get("id", "")
+        print(f"[DEBUG] 본문 요소: <{body.name} class='{' '.join(cls)}' id='{bid}'>", file=sys.stderr)
+
     text = body.get_text(separator="\n") if body else ""
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    print(f"[DEBUG] 본문 줄 수: {len(lines)}", file=sys.stderr)
+    # Show first 20 non-empty lines for diagnosis
+    for i, ln in enumerate(lines[:20]):
+        print(f"[DEBUG] L{i:02d}: {ln[:80]}", file=sys.stderr)
+
     current_date: Optional[date] = None
 
     for line in lines:
@@ -273,7 +297,11 @@ def _parse_article(soup: BeautifulSoup, url: str) -> list[LegalEvent]:
         if not current_date:
             continue
 
+        # Match "HH:MM event" OR "오전/오후 N시(M분) event"
         time_match = re.match(r"^(\d{1,2}[:.]\d{2})\s+(.+)", line)
+        korean_time = re.match(r"^((?:오전|오후)\s*\d{1,2}시(?:\s*\d{1,2}분)?)\s+(.+)", line)
+        if not time_match and korean_time:
+            time_match = korean_time
         if time_match:
             start_time = _parse_time(time_match.group(1))
             rest = time_match.group(2)
@@ -295,6 +323,7 @@ def _parse_article(soup: BeautifulSoup, url: str) -> list[LegalEvent]:
                     LegalEvent(title, current_date, None, None, location, line, url)
                 )
 
+    print(f"[DEBUG] 파싱 결과: {len(events)}개 일정", file=sys.stderr)
     return events
 
 
