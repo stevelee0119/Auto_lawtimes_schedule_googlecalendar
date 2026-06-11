@@ -329,22 +329,28 @@ def _parse_article(soup: BeautifulSoup, url: str) -> list[LegalEvent]:
     events: list[LegalEvent] = []
     year = datetime.now().year
 
-    # Try progressively broader selectors
+    # Try specific article-content selectors first
     body = soup.select_one(
         ".article-body, .news-body, #article-body, .content-body,"
-        " #news-view-text, .view-content, #viewContent, .article_body,"
+        " #news-view-text, #viewContent, .article_body,"
         " .article-view-content, #articleBodyContents, .news_view,"
-        " div[class*='article'], div[class*='content'], div[id*='article']"
+        " [itemprop='articleBody'], .article-content, #article-content"
     )
     if not body:
-        body = soup.find("div", {"class": re.compile(r"(article|content|body|view)", re.I)})
-    if not body:
-        body = soup.body
+        # Find div with the most text content (avoids nav/search forms)
+        candidates = soup.find_all("div")
+        if candidates:
+            body = max(candidates, key=lambda d: len(d.get_text()))
 
     if body and body.name:
         cls = body.get("class", [])
         bid = body.get("id", "")
-        print(f"[DEBUG] 본문 요소: <{body.name} class='{' '.join(cls)}' id='{bid}'>", file=sys.stderr)
+        txt_preview = body.get_text()[:60].replace("\n", " ")
+        print(
+            f"[DEBUG] 본문 요소: <{body.name} class='{' '.join(cls)}' id='{bid}'> "
+            f"텍스트 길이={len(body.get_text())} 미리보기: {txt_preview}",
+            file=sys.stderr,
+        )
 
     text = body.get_text(separator="\n") if body else ""
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -396,6 +402,13 @@ def fetch_this_week_events() -> list[LegalEvent]:
     """법률신문에서 이번 주 법조일정을 가져온다."""
     session = requests.Session()
 
+    # Warm up session: visit homepage to acquire cookies and look natural
+    try:
+        session.get(ARTICLE_BASE + "/", headers=HEADERS, timeout=10)
+        print("[DEBUG] 홈페이지 방문 완료 (쿠키 초기화)", file=sys.stderr)
+    except Exception as e:
+        print(f"[DEBUG] 홈페이지 방문 실패 (계속 진행): {e}", file=sys.stderr)
+
     article_url = _get_latest_calendar_url(session)
     if not article_url:
         raise RuntimeError(
@@ -404,7 +417,16 @@ def fetch_this_week_events() -> list[LegalEvent]:
         )
 
     print(f"[INFO] 기사 URL: {article_url}", file=sys.stderr)
-    resp = session.get(article_url, headers=HEADERS, timeout=15)
+    article_headers = {
+        **HEADERS,
+        "Referer": "https://www.lawtimes.co.kr/",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "same-origin",
+    }
+    resp = session.get(article_url, headers=article_headers, timeout=15)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
     return _parse_article(soup, article_url)
