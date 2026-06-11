@@ -30,6 +30,9 @@ NAVER_SEARCH_URL = (
     "&sort=1&nso=so:dd,p:1m"
 )
 
+# 기사 제목 키워드 (RSS/검색 결과 필터용)
+SCHEDULE_KEYWORDS = ["법조일정", "이번주", "이주의", "법조 일정", "주간 일정"]
+
 # 법률신문 RSS 후보
 RSS_CANDIDATES = [
     "https://www.lawtimes.co.kr/rss/allArticle.xml",
@@ -138,7 +141,7 @@ def _try_site_rss(session: requests.Session) -> Optional[str]:
                             print(f"[DEBUG] RSS tail 발견: {link_candidate}", file=sys.stderr)
                             return link_candidate
 
-                if "이번주" not in title:
+                if not any(kw in title for kw in SCHEDULE_KEYWORDS):
                     continue
 
                 link_elem = item.find("link")
@@ -147,6 +150,7 @@ def _try_site_rss(session: requests.Session) -> Optional[str]:
                     guid_elem = item.find("guid")
                     link = (guid_elem.text or "").strip() if guid_elem is not None else ""
 
+                print(f"[DEBUG] RSS 일치 제목: {title[:60]}, 링크: {link[:60]}", file=sys.stderr)
                 if "lawtimes.co.kr" in link:
                     print(f"[DEBUG] RSS 발견: {link}", file=sys.stderr)
                     return link
@@ -167,9 +171,9 @@ def _try_main_page(session: requests.Session) -> Optional[str]:
         for a in soup.find_all("a", href=True):
             href = a["href"]
             title = a.get_text(strip=True)
-            if _is_lawtimes_article_url(href) and "이번주" in title:
+            if _is_lawtimes_article_url(href) and any(kw in title for kw in SCHEDULE_KEYWORDS):
                 full = ARTICLE_BASE + href if href.startswith("/") else href
-                print(f"[DEBUG] 메인 페이지 발견: {full}", file=sys.stderr)
+                print(f"[DEBUG] 메인 페이지 발견: {full} ({title[:30]})", file=sys.stderr)
                 return full
     except Exception as e:
         print(f"[DEBUG] 메인 페이지 실패: {e}", file=sys.stderr)
@@ -214,6 +218,10 @@ def _try_google_news_rss(session: requests.Session) -> Optional[str]:
 
             if not link:
                 continue
+
+            # CBMi... encoded IDs need full Google URL prefix
+            if not link.startswith("http"):
+                link = f"https://news.google.com/articles/{link}"
 
             print(f"[DEBUG] Google RSS 링크: {link[:80]}", file=sys.stderr)
 
