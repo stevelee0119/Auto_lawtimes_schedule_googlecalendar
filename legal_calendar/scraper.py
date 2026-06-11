@@ -12,21 +12,6 @@ from bs4 import BeautifulSoup
 
 ARTICLE_BASE = "https://www.lawtimes.co.kr"
 
-# Google News RSS: 법률신문 '이번주 법조 일정' 검색
-GOOGLE_NEWS_RSS = (
-    "https://news.google.com/rss/search"
-    "?q=%EC%9D%B4%EB%B2%88%EC%A3%BC+%EB%B2%95%EC%A1%B0+%EC%9D%BC%EC%A0%95"
-    "+site%3Alawtimes.co.kr&hl=ko&gl=KR&ceid=KR%3Ako"
-)
-
-# 목록 페이지 후보 (사이트 개편으로 변경될 수 있음)
-CALENDAR_LIST_CANDIDATES = [
-    "https://www.lawtimes.co.kr/news/list?page=1&kind=AG02",
-    "https://www.lawtimes.co.kr/news/list?page=1&kind=A15",
-    "https://www.lawtimes.co.kr/news/list?page=1&kind=AG01",
-    "https://www.lawtimes.co.kr/news/list?page=1&kind=AG03",
-]
-
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -37,6 +22,21 @@ HEADERS = {
     "Accept-Language": "ko-KR,ko;q=0.9",
     "Referer": "https://www.lawtimes.co.kr/",
 }
+
+# 네이버 뉴스 검색 - 법률신문 이번주 법조 일정 (최신순)
+NAVER_SEARCH_URL = (
+    "https://search.naver.com/search.naver?where=news"
+    "&query=%EC%9D%B4%EB%B2%88%EC%A3%BC+%EB%B2%95%EC%A1%B0+%EC%9D%BC%EC%A0%95+%EB%B2%95%EB%A5%A0%EC%8B%A0%EB%AC%B8"
+    "&sort=1&nso=so:dd,p:1m"
+)
+
+# 법률신문 RSS 후보
+RSS_CANDIDATES = [
+    "https://www.lawtimes.co.kr/rss/allArticle.xml",
+    "https://www.lawtimes.co.kr/rss/index.xml",
+    "https://www.lawtimes.co.kr/news/rss",
+    "https://www.lawtimes.co.kr/rss/",
+]
 
 
 @dataclass
@@ -70,93 +70,180 @@ def _parse_date(text: str, reference_year: int) -> Optional[date]:
     return None
 
 
-def _is_schedule_article(title: str) -> bool:
-    return "이번주" in title and ("법조" in title or "일정" in title)
+def _is_lawtimes_article_url(href: str) -> bool:
+    return bool(
+        href
+        and "lawtimes.co.kr" in href
+        and re.search(r"(idxno=\d+|/\d{4,})", href)
+    )
 
 
-def _get_latest_calendar_url_via_google_news(session: requests.Session) -> Optional[str]:
-    """Google News RSS로 최신 '이번주 법조 일정' 기사 URL을 찾는다."""
+def _try_naver_search(session: requests.Session) -> Optional[str]:
+    """네이버 뉴스 검색으로 최신 '이번주 법조 일정' URL을 탐색."""
+    naver_headers = {**HEADERS, "Referer": "https://www.naver.com/"}
     try:
-        resp = session.get(GOOGLE_NEWS_RSS, timeout=15)
+        resp = session.get(NAVER_SEARCH_URL, headers=naver_headers, timeout=15)
+        print(f"[DEBUG] Naver 검색: HTTP {resp.status_code}", file=sys.stderr)
         if resp.status_code != 200:
-            print(f"[DEBUG] Google News RSS: HTTP {resp.status_code}", file=sys.stderr)
             return None
 
-        root = ET.fromstring(resp.content)
-        channel = root.find("channel")
-        items = channel.findall("item") if channel is not None else root.findall(".//item")
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if _is_lawtimes_article_url(href):
+                title = a.get_text(strip=True)
+                print(f"[DEBUG] Naver 발견: {href} ({title[:30]})", file=sys.stderr)
+                return href
 
-        for item in items:
-            title_elem = item.find("title")
-            title_text = title_elem.text if title_elem is not None else ""
+        # data-url 속성도 확인
+        for tag in soup.find_all(attrs={"data-url": True}):
+            href = tag["data-url"]
+            if _is_lawtimes_article_url(href):
+                print(f"[DEBUG] Naver data-url 발견: {href}", file=sys.stderr)
+                return href
 
-            # ET quirk: <link> in RSS is sometimes in title.tail
-            link_url = None
-            if title_elem is not None and title_elem.tail and title_elem.tail.strip():
-                link_url = title_elem.tail.strip()
-
-            if not link_url:
-                link_elem = item.find("link")
-                if link_elem is not None and link_elem.text:
-                    link_url = link_elem.text.strip()
-
-            if not link_url:
-                guid_elem = item.find("guid")
-                if guid_elem is not None and guid_elem.text:
-                    link_url = guid_elem.text.strip()
-
-            if link_url:
-                if "lawtimes.co.kr" in link_url:
-                    print(f"[DEBUG] Google News 직접 URL: {link_url}", file=sys.stderr)
-                    return link_url
-                # Google 리다이렉트 URL → 실제 기사 URL로 따라가기
-                try:
-                    r = session.get(link_url, headers=HEADERS, timeout=15, allow_redirects=True)
-                    if "lawtimes.co.kr" in r.url:
-                        print(f"[DEBUG] Google News 리다이렉트 URL: {r.url}", file=sys.stderr)
-                        return r.url
-                except Exception as e:
-                    print(f"[DEBUG] 리다이렉트 실패: {e}", file=sys.stderr)
-
+        print("[DEBUG] Naver 결과에 lawtimes.co.kr 링크 없음", file=sys.stderr)
     except Exception as e:
-        print(f"[DEBUG] Google News RSS 실패: {e}", file=sys.stderr)
-
+        print(f"[DEBUG] Naver 검색 실패: {e}", file=sys.stderr)
     return None
 
 
-def _get_latest_calendar_url_via_list(session: requests.Session) -> Optional[str]:
-    """목록 페이지에서 '이번주 법조 일정' 기사 URL을 찾는다."""
-    for list_url in CALENDAR_LIST_CANDIDATES:
+def _try_site_rss(session: requests.Session) -> Optional[str]:
+    """법률신문 자체 RSS에서 최신 기사 URL 탐색."""
+    for rss_url in RSS_CANDIDATES:
         try:
-            resp = session.get(list_url, headers=HEADERS, timeout=15)
-            print(f"[DEBUG] 목록 URL {list_url}: HTTP {resp.status_code}", file=sys.stderr)
+            resp = session.get(rss_url, headers=HEADERS, timeout=10)
+            print(f"[DEBUG] RSS {rss_url}: HTTP {resp.status_code}", file=sys.stderr)
             if resp.status_code != 200:
                 continue
 
-            soup = BeautifulSoup(resp.text, "html.parser")
-            for a in soup.select("a[href]"):
-                href = a["href"]
-                if "/news/" in href and re.search(r"\d+", href):
-                    title_text = a.get_text(strip=True)
-                    if _is_schedule_article(title_text):
-                        url = ARTICLE_BASE + href if href.startswith("/") else href
-                        print(f"[DEBUG] 목록에서 발견: {url}", file=sys.stderr)
-                        return url
-        except Exception as e:
-            print(f"[DEBUG] 목록 URL 실패 {list_url}: {e}", file=sys.stderr)
+            root = ET.fromstring(resp.content)
+            for item in root.iter("item"):
+                title_elem = item.find("title")
+                title = ""
+                if title_elem is not None:
+                    title = (title_elem.text or "").strip()
+                    # ET quirk: link URL sometimes in title.tail for RSS 2.0
+                    if title_elem.tail and title_elem.tail.strip():
+                        link_candidate = title_elem.tail.strip()
+                        if "lawtimes.co.kr" in link_candidate and "이번주" in title:
+                            print(f"[DEBUG] RSS tail 발견: {link_candidate}", file=sys.stderr)
+                            return link_candidate
 
+                if "이번주" not in title:
+                    continue
+
+                link_elem = item.find("link")
+                link = (link_elem.text or "").strip() if link_elem is not None else ""
+                if not link:
+                    guid_elem = item.find("guid")
+                    link = (guid_elem.text or "").strip() if guid_elem is not None else ""
+
+                if "lawtimes.co.kr" in link:
+                    print(f"[DEBUG] RSS 발견: {link}", file=sys.stderr)
+                    return link
+        except Exception as e:
+            print(f"[DEBUG] RSS 실패 {rss_url}: {e}", file=sys.stderr)
+    return None
+
+
+def _try_main_page(session: requests.Session) -> Optional[str]:
+    """메인 페이지에서 직접 법조일정 링크 탐색 (쿠키 초기화 겸용)."""
+    try:
+        resp = session.get(ARTICLE_BASE + "/", headers=HEADERS, timeout=10)
+        print(f"[DEBUG] 메인 페이지: HTTP {resp.status_code}", file=sys.stderr)
+        if resp.status_code != 200:
+            return None
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            title = a.get_text(strip=True)
+            if _is_lawtimes_article_url(href) and "이번주" in title:
+                full = ARTICLE_BASE + href if href.startswith("/") else href
+                print(f"[DEBUG] 메인 페이지 발견: {full}", file=sys.stderr)
+                return full
+    except Exception as e:
+        print(f"[DEBUG] 메인 페이지 실패: {e}", file=sys.stderr)
+    return None
+
+
+def _try_google_news_rss(session: requests.Session) -> Optional[str]:
+    """Google News RSS에서 최신 기사 URL 탐색."""
+    rss_url = (
+        "https://news.google.com/rss/search"
+        "?q=%EC%9D%B4%EB%B2%88%EC%A3%BC+%EB%B2%95%EC%A1%B0+%EC%9D%BC%EC%A0%95"
+        "+site%3Alawtimes.co.kr&hl=ko&gl=KR&ceid=KR%3Ako"
+    )
+    try:
+        resp = session.get(rss_url, timeout=10)
+        print(
+            f"[DEBUG] Google RSS: HTTP {resp.status_code}, {len(resp.content)}bytes",
+            file=sys.stderr,
+        )
+        if resp.status_code != 200:
+            return None
+
+        soup = BeautifulSoup(resp.content, "html.parser")
+        items = soup.find_all("item")
+        print(f"[DEBUG] Google RSS 항목: {len(items)}개", file=sys.stderr)
+
+        for item in items:
+            source = item.find("source")
+            source_url = source.get("url", "") if source else ""
+            if "lawtimes.co.kr" not in source_url:
+                continue
+
+            # link 추출 (html.parser는 <link>를 다르게 파싱)
+            link = None
+            raw = str(item)
+            m = re.search(r"<link[^>]*>([^<]+)</link>", raw)
+            if m:
+                link = m.group(1).strip()
+            if not link:
+                guid = item.find("guid")
+                link = guid.get_text().strip() if guid else None
+
+            if not link:
+                continue
+
+            print(f"[DEBUG] Google RSS 링크: {link[:80]}", file=sys.stderr)
+
+            if "lawtimes.co.kr" in link:
+                return link
+
+            try:
+                r = session.get(link, timeout=10, allow_redirects=True)
+                print(f"[DEBUG] Google RSS 리다이렉트: {r.url}", file=sys.stderr)
+                if "lawtimes.co.kr" in r.url:
+                    return r.url
+            except Exception as e:
+                print(f"[DEBUG] 리다이렉트 실패: {e}", file=sys.stderr)
+
+    except Exception as e:
+        print(f"[DEBUG] Google RSS 실패: {e}", file=sys.stderr)
     return None
 
 
 def _get_latest_calendar_url(session: requests.Session) -> Optional[str]:
-    """최신 '이번주 법조 일정' 기사 URL을 반환한다."""
-    # 1순위: Google News RSS (목록 URL 변경에 영향받지 않음)
-    url = _get_latest_calendar_url_via_google_news(session)
+    """최신 '이번주 법조 일정' 기사 URL 반환."""
+    print("[DEBUG] 1단계: Naver 뉴스 검색", file=sys.stderr)
+    url = _try_naver_search(session)
     if url:
         return url
 
-    # 2순위: 목록 페이지 직접 접근
-    url = _get_latest_calendar_url_via_list(session)
+    print("[DEBUG] 2단계: 법률신문 RSS", file=sys.stderr)
+    url = _try_site_rss(session)
+    if url:
+        return url
+
+    print("[DEBUG] 3단계: 메인 페이지", file=sys.stderr)
+    url = _try_main_page(session)
+    if url:
+        return url
+
+    print("[DEBUG] 4단계: Google News RSS", file=sys.stderr)
+    url = _try_google_news_rss(session)
     if url:
         return url
 
@@ -175,7 +262,7 @@ def _parse_article(soup: BeautifulSoup, url: str) -> list[LegalEvent]:
         body = soup.body
 
     text = body.get_text(separator="\n") if body else ""
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     current_date: Optional[date] = None
 
     for line in lines:
@@ -183,7 +270,6 @@ def _parse_article(soup: BeautifulSoup, url: str) -> list[LegalEvent]:
         if parsed and len(line) < 30:
             current_date = parsed
             continue
-
         if not current_date:
             continue
 
@@ -197,13 +283,17 @@ def _parse_article(soup: BeautifulSoup, url: str) -> list[LegalEvent]:
             end_match = re.search(r"~(\d{1,2}[:.]\d{2})", line)
             end_time = _parse_time(end_match.group(1)) if end_match else None
             if title:
-                events.append(LegalEvent(title, current_date, start_time, end_time, location, line, url))
+                events.append(
+                    LegalEvent(title, current_date, start_time, end_time, location, line, url)
+                )
         elif len(line) > 5 and not re.match(r"^[\d\s]+$", line):
             loc_match = re.search(r"[（(]([^）)]+)[）)]", line)
             location = loc_match.group(1) if loc_match else None
             title = re.sub(r"\s*[（(][^）)]+[）)]", "", line).strip()
             if title and len(title) > 3:
-                events.append(LegalEvent(title, current_date, None, None, location, line, url))
+                events.append(
+                    LegalEvent(title, current_date, None, None, location, line, url)
+                )
 
     return events
 
@@ -214,11 +304,13 @@ def fetch_this_week_events() -> list[LegalEvent]:
 
     article_url = _get_latest_calendar_url(session)
     if not article_url:
-        raise RuntimeError("법률신문에서 법조일정 기사를 찾을 수 없습니다. (Google News RSS 및 목록 페이지 모두 실패)")
+        raise RuntimeError(
+            "법률신문에서 법조일정 기사를 찾을 수 없습니다.\n"
+            "(Naver 검색, 사이트 RSS, 메인 페이지, Google News RSS 모두 실패)"
+        )
 
-    print(f"기사 URL: {article_url}", file=sys.stderr)
+    print(f"[INFO] 기사 URL: {article_url}", file=sys.stderr)
     resp = session.get(article_url, headers=HEADERS, timeout=15)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
-
     return _parse_article(soup, article_url)
