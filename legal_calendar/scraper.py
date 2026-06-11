@@ -325,6 +325,21 @@ def _get_latest_calendar_url(session: requests.Session) -> Optional[str]:
     return None
 
 
+def _extract_reference_month(soup: BeautifulSoup, year: int) -> Optional[int]:
+    """기사 페이지에서 기준 월(月)을 추출한다."""
+    # Try page title and article headings for "N월"
+    for tag in soup.find_all(["title", "h1", "h2", "h3"]):
+        text = tag.get_text()
+        m = re.search(r"(\d{1,2})월", text)
+        if m:
+            month = int(m.group(1))
+            if 1 <= month <= 12:
+                print(f"[DEBUG] 기준 월 추출: {month}월 (from <{tag.name}>)", file=sys.stderr)
+                return month
+    # Fallback: use current month
+    return datetime.now().month
+
+
 def _parse_article(soup: BeautifulSoup, url: str) -> list[LegalEvent]:
     events: list[LegalEvent] = []
     year = datetime.now().year
@@ -337,8 +352,8 @@ def _parse_article(soup: BeautifulSoup, url: str) -> list[LegalEvent]:
         " [itemprop='articleBody'], .article-content, #article-content"
     )
     if not body:
-        # Find div with the most text content (avoids nav/search forms)
-        candidates = soup.find_all("div")
+        # Find the element with the most text content (avoids nav/search forms)
+        candidates = soup.find_all(["div", "section", "article", "main"])
         if candidates:
             body = max(candidates, key=lambda d: len(d.get_text()))
 
@@ -358,17 +373,57 @@ def _parse_article(soup: BeautifulSoup, url: str) -> list[LegalEvent]:
     for i, ln in enumerate(lines[:20]):
         print(f"[DEBUG] L{i:02d}: {ln[:80]}", file=sys.stderr)
 
+    reference_month: Optional[int] = _extract_reference_month(soup, year)
     current_date: Optional[date] = None
 
     for line in lines:
+        # Format A: "△DD일(요일)" – day-only header (lawtimes.co.kr current format)
+        delta_match = re.match(r"^[△▲◆●◇■□▷]\s*(\d{1,2})일", line)
+        if delta_match and len(line) < 15:
+            day = int(delta_match.group(1))
+            month = reference_month or datetime.now().month
+            try:
+                current_date = date(year, month, day)
+                print(f"[DEBUG] 날짜 설정: {current_date} (from '{line}')", file=sys.stderr)
+            except ValueError:
+                pass
+            continue
+
+        # Format B: "MM월 DD일" full date header
         parsed = _parse_date(line, year)
         if parsed and len(line) < 40:
             current_date = parsed
+            print(f"[DEBUG] 날짜 설정: {current_date} (from '{line}')", file=sys.stderr)
             continue
+
         if not current_date:
             continue
 
-        # Match "HH:MM event" OR "오전/오후 N시(M분) event"
+        # Event line starting with "-" or "·" (lawtimes.co.kr format)
+        event_prefix = re.match(r"^[-·•▶]\s*(.+)", line)
+        if event_prefix:
+            event_text = event_prefix.group(1).strip()
+            # Extract time from trailing parentheses like (오전 10시) or (오후 2시 30분)
+            time_paren = re.search(
+                r"[（(]((?:오전|오후)\s*\d{1,2}시(?:\s*\d{1,2}분)?)[）)]", event_text
+            )
+            start_time = _parse_time(time_paren.group(1)) if time_paren else None
+            # Extract location: last parenthesised group that is NOT a time
+            loc_match = None
+            for m in re.finditer(r"[（(]([^）)]+)[）)]", event_text):
+                candidate = m.group(1)
+                if not re.search(r"오전|오후|\d+시", candidate):
+                    loc_match = m
+            location = loc_match.group(1) if loc_match else None
+            # Strip all parenthesised groups to get clean title
+            title = re.sub(r"\s*[（(][^）)]+[）)]", "", event_text).strip()
+            if title and len(title) > 2:
+                events.append(
+                    LegalEvent(title, current_date, start_time, None, location, line, url)
+                )
+            continue
+
+        # Existing formats: "HH:MM event" or "오전/오후 N시 event"
         time_match = re.match(r"^(\d{1,2}[:.]\d{2})\s+(.+)", line)
         korean_time = re.match(r"^((?:오전|오후)\s*\d{1,2}시(?:\s*\d{1,2}분)?)\s+(.+)", line)
         if not time_match and korean_time:
@@ -384,14 +439,6 @@ def _parse_article(soup: BeautifulSoup, url: str) -> list[LegalEvent]:
             if title:
                 events.append(
                     LegalEvent(title, current_date, start_time, end_time, location, line, url)
-                )
-        elif len(line) > 5 and not re.match(r"^[\d\s]+$", line):
-            loc_match = re.search(r"[（(]([^）)]+)[）)]", line)
-            location = loc_match.group(1) if loc_match else None
-            title = re.sub(r"\s*[（(][^）)]+[）)]", "", line).strip()
-            if title and len(title) > 3:
-                events.append(
-                    LegalEvent(title, current_date, None, None, location, line, url)
                 )
 
     print(f"[DEBUG] 파싱 결과: {len(events)}개 일정", file=sys.stderr)
