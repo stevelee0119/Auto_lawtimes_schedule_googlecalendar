@@ -25,19 +25,7 @@ jobs:
       - name: Run legal calendar sync
         env:
           # GitHub Secrets에 서비스 계정 JSON 전체를 저장
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ {
-  "type": "service_account",
-  "project_id": "army-jags-corp-ai-research",
-  "private_key_id": "6602918825acd2ea76586f850fb1739ca58bf314",
-  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCfZeAttvvYIeZ2\nzIwzJ/iSkAlYRJI81kRzFwS1wH99uk2u4xRodUN9Ih0p54z0kBucyEwBBfNbcenU\nCA4SqFAi7aBL3gHDMP12X2WWmQ36SbrWmEOz/tyJ3De7tmpbh53uitCBYMQc1GWP\nOLQchQp7lHC2MUM4IJAPxsTzBfEs33fC9M372XIB4ci6ImJNuyqxqF2tBcwg4UG3\nAbv7XrW5MLdy0uuIqsAbc1wcBbtrzdBnzpNGdU4x3XmPAF7LweouepfrGr9lwzTs\nYe8LAxZGqXs8h9q0mnjJd/hg8fe3i8NFktLHSnNSMc0tIfBh3iFCU6ZJGyISonwK\nb23Vz2A5AgMBAAECggEAAZIllNHBNuKzpJ9UsOLflWMvwmPPnKOgclFrYZarcvvh\nbNwuTO696udpieqPJjBe40tKi3aJbNDpNOac6+RmgMeefSzrj8bFcrOTOtoYjAtK\nuPdwcF9OQVoPHw2Xy/3gybNqxWGkoSObOh99D+xkO25Ns4/1+YFBpjQnZ/06oJ5x\nsYQ1KcW9Dg5m/HACrl+NCMS9WBIoZ6lkb6Sm5gzqpOfQFVQYuChGkVO0IFmMpRaQ\n0+uEvWVd5z/6C3tIYGGBRtJo9geOWBEJS13+9jury5RGKG9d+D+X4O7VyEbfJg0P\ni5b1mja+y5ZWz7ahRk/NskhijN6+mFfOmpFeGUJQYQKBgQDTQS6q9TNFeLI5srRx\nMPzISYiP0IVqxaZwj09tFwzocHq7am5GKPOVSYigj9Y9eaaDVX/l86ahTGpKFSvN\ndFqThyG5/lMoKbpdaBb2i7Vsn63NU+XxUhjHziyqhQn+Cof2jvzpTzzr0fK4WYy8\nAuvPw1OYnxsg5ctJSQVVoyLuWQKBgQDBKOEqtp+BF38ci0VEiv0lMN8zwHVKr8jf\ntRBHYT8lMrrYJ9Uk5tPDxl1MsZ8ekQLRzwlMyzWcWfptE7yLh4JtQ+9fQwfzVwjY\n8ToLYd7Roph+tVfhHVEJgiuolNjLYbjmEf6fugIhWwjFPHGWGNvSVDXgR1Z5iQiQ\n/ZLakCaE4QKBgGrTJzojy81xfw5WI5CpaOoO5RN0KkMXt1Zr4YoUgd54IlfrNeAc\njTAMgx5OHdPwVBdNgONTFguyjHzxv7ihAbxgNNnMlVhV4XuiSxpZA2DuTgDqT/h7\nvzQqOcPwimEACkjPfWytOO02uTonblcUUxI4f2lJ63nzOZzRY/UuDVfhAoGBAKZP\n+G+6hmO0Q3HkSGPX+FbJWaVJlLQV3rMfR0Dublws7cunoFIBnVv3s+WRGhxLZ04X\nIT7JyQMyRfkdAT5yEs7Zq4UuRe4zhh6ktQGP5zZA9WRD58KgZ2H0fnrMjk2venA+\nFiqZEbR+mXKZtIM0LDFQ6IKPadmDL6kHbCZb746BAoGAKI3XMERA4z3dn6pm8V8Y\nCuBtLbkhLEHFqOUdRrfGT1pYbVnSdhBElaM6S294Uip52gLSgrzsOXF3RGFuiRZ/\njcsMXcL2kg6MZQRV3h2mpbyDrFWkA3swMH0oEth1b/g3DSZ4z2D7KvgaJwKzLw9o\nPZ7FiuEj2n0/YyGSvE4vW10=\n-----END PRIVATE KEY-----\n",
-  "client_email": "auto-lawtimes-googlecalendar@army-jags-corp-ai-research.iam.gserviceaccount.com",
-  "client_id": "111370401168022528785",
-  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-  "token_uri": "https://oauth2.googleapis.com/token",
-  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/auto-lawtimes-googlecalendar%40army-jags-corp-ai-research.iam.gserviceaccount.com",
-  "universe_domain": "googleapis.com"
-} }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           # 특정 캘린더를 쓰려면 calendar ID를 secrets에 저장
-          GOOGLE_CALENDAR_ID: ${{ mrleechangmin@gmail.com || 'primary' }}
+          GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID || 'primary' }}
         run: python -m legal_calendar.main
