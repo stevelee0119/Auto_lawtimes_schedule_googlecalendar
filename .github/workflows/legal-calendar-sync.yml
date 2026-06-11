@@ -1,0 +1,31 @@
+name: Legal Calendar Sync
+
+on:
+  schedule:
+    # 매주 일요일 오후 4시 (KST = UTC+9) → UTC 일요일 07:00
+    - cron: "0 7 * * 0"
+  workflow_dispatch:  # 수동 실행 지원
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r legal_calendar/requirements.txt
+
+      - name: Run legal calendar sync
+        env:
+          # GitHub Secrets에 서비스 계정 JSON 전체를 저장
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          # 특정 캘린더를 쓰려면 calendar ID를 secrets에 저장
+          GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID || 'primary' }}
+        run: python -m legal_calendar.main
