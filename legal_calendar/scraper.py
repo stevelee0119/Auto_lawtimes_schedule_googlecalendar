@@ -2,13 +2,13 @@
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Optional
 
 import requests
 from bs4 import BeautifulSoup
 
-CALENDAR_URL = "https://www.lawtimes.co.kr/news/list?kind=A15"
+CALENDAR_URL = "https://www.lawtimes.co.kr/news/list?page=1&kind=AG02"
 ARTICLE_BASE = "https://www.lawtimes.co.kr"
 
 HEADERS = {
@@ -61,15 +61,23 @@ def _get_latest_calendar_url(session: requests.Session) -> Optional[str]:
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    # 목록의 첫 번째 기사 링크 탐색
+    # 우선순위 1: '이번주 법조 일정' 제목 기사 탐색
     for a in soup.select("a[href]"):
         href = a["href"]
         if "/news/" in href and re.search(r"\d+", href):
             title_text = a.get_text(strip=True)
-            if "법조일정" in title_text or "일정" in title_text:
+            if "이번주" in title_text and ("법조" in title_text or "일정" in title_text):
                 return ARTICLE_BASE + href if href.startswith("/") else href
 
-    # 제목 기반 탐색 실패 시 첫 번째 뉴스 링크
+    # 우선순위 2: '법조일정' 또는 '일정' 포함 기사
+    for a in soup.select("a[href]"):
+        href = a["href"]
+        if "/news/" in href and re.search(r"\d+", href):
+            title_text = a.get_text(strip=True)
+            if "법조일정" in title_text or ("일정" in title_text and "법조" in title_text):
+                return ARTICLE_BASE + href if href.startswith("/") else href
+
+    # 우선순위 3: 첫 번째 뉴스 링크
     first = soup.select_one("ul.news-list li a, .article-list a, .list-item a")
     if first:
         href = first["href"]
@@ -112,12 +120,10 @@ def _parse_article(soup: BeautifulSoup, url: str) -> list[LegalEvent]:
             start_time = _parse_time(time_match.group(1))
             rest = time_match.group(2)
 
-            # 장소 추출 (괄호 안)
             loc_match = re.search(r"[（(]([^）)]+)[）)]", rest)
             location = loc_match.group(1) if loc_match else None
             title = re.sub(r"\s*[（(][^）)]+[）)]", "", rest).strip()
 
-            # 종료 시간 추출 (~HH:MM)
             end_match = re.search(r"~(\d{1,2}[:.]\d{2})", line)
             end_time = _parse_time(end_match.group(1)) if end_match else None
 
@@ -134,7 +140,6 @@ def _parse_article(soup: BeautifulSoup, url: str) -> list[LegalEvent]:
                     )
                 )
         elif len(line) > 5 and not re.match(r"^[\d\s]+$", line):
-            # 시간 없는 일정 항목
             loc_match = re.search(r"[（(]([^）)]+)[）)]", line)
             location = loc_match.group(1) if loc_match else None
             title = re.sub(r"\s*[（(][^）)]+[）)]", "", line).strip()
@@ -158,7 +163,6 @@ def fetch_this_week_events() -> list[LegalEvent]:
     """법률신문에서 이번 주 법조일정을 가져온다."""
     session = requests.Session()
 
-    # 목록 페이지에서 최신 기사 URL 찾기
     article_url = _get_latest_calendar_url(session)
     if not article_url:
         raise RuntimeError("법률신문 목록에서 법조일정 기사를 찾을 수 없습니다.")
