@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: officer-id-form
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    rootDir: form_app
+    envVars:
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false   # Set this manually in Render dashboard
+      - key: SPREADSHEET_NAME
+        value: 인식표_정보수집
+      - key: ADMIN_SECRET
+        sync: false   # Set a secret key to protect the /download endpoint
